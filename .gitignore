@@ -1,0 +1,5 @@
+*.pyc
+*.py_history
+*.DS_Store
+secrets.json
+
