@@ -1,10 +1,10 @@
 # Organization
-data
-├── channels
-└── videos
-    ├── data
-        ├── unit_channel
-        └── unit_video
+data\
+├── channels\
+└── videos\
+    ├── data\
+        ├── unit_channel\
+        └── unit_video\
     └── thumbnails
 
 ## data/channels
