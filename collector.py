@@ -1,5 +1,6 @@
 import os
 import json
+from csv import reader
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from googleapiclient.discovery import build
@@ -23,7 +24,7 @@ def check_channel_id(channels_list: list, path: str) -> list:
     ]
 
     to_remove = []
-    # do a lookup of the channel id in the /data/channels directory to see if a file already exists
+    # do a lookup of the channel id in the directory to see if a file already exists
     for channel_id in channels_list:
         if channel_id in channels_in_dir:
             to_remove.append(channel_id)
@@ -76,7 +77,7 @@ def page_through_response(service_instance, request, response) -> dict:
     return output
 
 
-def get_channel_details(service, channel_ids, part='snippet,statistics,brandingSettings', results=50):
+def get_channel_details(service, channel_ids: str, part='snippet,statistics,brandingSettings', results=50):
     """
     Makes use of the channel resource list method. Gets channel data for 
     resource properties defined in the part argument and writes the repsonse
@@ -97,13 +98,15 @@ def get_channel_details(service, channel_ids, part='snippet,statistics,brandingS
     channels_list = check_channel_id(channels_list, channels_path)
 
     if channels_list:
+        # take list of filtered channel ids -> string of comma-separated ids
+        channel_ids = ",".join(channels_list)
         # make the request to the resource
         request = channel_detail.list(
             part=part, id=channel_ids, maxResults=results
         )
         response = request.execute()
         response_items = response['items']
-        # want to write a folder with the channel id to /data/channels
+        # want to write a folder with the channel id to channels_path
         # that holds .json files of the response for each channel id
         for channel in response_items:  # channel is a dict of channel data
             with open(channels_path+'{}.json'.format(channel['id']), 'w+') as channel_data:
@@ -113,14 +116,14 @@ def get_channel_details(service, channel_ids, part='snippet,statistics,brandingS
 
 # TODO: - implement some sort of logging of the response
 #       - add exception handling
-def get_channel_videos(service, channel_id, part='snippet', type='video', results=50):
+def get_channel_videos(service, channel_id: str, part='snippet', type='video', results=50):
     """
     Get video data associated with a channel id and write the response to a JSON
     file in data/videos.
     """
     yt_search = service.search()
 
-    videos_path = 'data/videos/data/'
+    videos_path = 'data/videos/data/unit_channel/'
     channels_path = 'data/channels/'
     channel = check_channel_id([channel_id], videos_path)
 
@@ -161,7 +164,7 @@ def get_channel_videos(service, channel_id, part='snippet', type='video', result
                 else:
                     final_out = data_out
         else:
-            # TODO: refactor into some sort of helper func
+            # TODO: refactor
             request = yt_search.list(part=part,
                                      channelId=channel_id,
                                      type=type,
@@ -183,6 +186,10 @@ def get_video_thumbnails(img_url):
     pass
 
 
+def get_video_details():
+    pass
+
+
 def main():
     with open('secrets.json', 'r') as key:
         secrets = json.load(key)
@@ -192,12 +199,14 @@ def main():
     API_VERSION = 'v3'
 
     service = build(API_SERVICE_NAME, API_VERSION, developerKey=API_KEY)
-    channels = [
-        'UCfzlCWGWYyIQ0aLC5w48gBQ',
-        'UCCUw_xsps3VgtqLYR8vBSXw',
-        'UCCezIgC97PvUuR4_gbFUs5g',
-        'UC_ML5xP23TOWKUcc-oAE_Eg'
-    ]
+
+    # read channel ids from file
+    with open('channels.csv', 'r') as f:
+        csv_reader = reader(f)
+        next(csv_reader)  # skip header
+        rows = list(csv_reader)
+    # store channel ids in a list
+    channels = [row[0] for row in rows]
 
     channels_str = ",".join(channels)
     get_channel_details(service, channels_str)
