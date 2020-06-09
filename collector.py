@@ -4,6 +4,7 @@ from csv import reader
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from googleapiclient.discovery import build
+from data_processing.detect_face import detect_face
 
 
 def check_channel_id(channels_list: list, path: str) -> list:
@@ -180,10 +181,6 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
         with open(videos_path+'{}.json'.format(channel_id), 'w+') as video_data:
             response_obj = json.dumps(final_out)
             video_data.write(response_obj)
-
-
-def get_video_thumbnails(img_url):
-    pass
 
 
 def get_video_details():
