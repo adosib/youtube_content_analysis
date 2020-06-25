@@ -183,8 +183,19 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
             video_data.write(response_obj)
 
 
-def get_video_details():
+def check_video_id():
     pass
+
+
+def get_video_details(service, part='snippet,contentDetails,statistics,topicDetails', results=50):
+    """
+    Loop through files in data/videos/unit_channel to get the videoId inside of each objects 
+    in the items list. Use this id to request data from the videos resource to get statistics 
+    on each video.
+    """
+    video_detail = service.videos()
+    video_ids = check_video_id()  # str of comma-sep video ids
+    video_detail.list(part=part, id=video_ids, maxResults=results)
 
 
 def main():
