@@ -1,15 +1,25 @@
 import os
 import json
+import logging
 from csv import reader
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from googleapiclient.discovery import build
 from data_processing.detect_face import detect_face
 
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+formatter = logging.Formatter(
+    '%(asctime)s:%(levelname)s:%(name)s:%(funcName)s:%(message)s'
+)
+file_handler = logging.FileHandler("collector.log")
+file_handler.setFormatter(formatter)
+logger.addHandler(file_handler)
+
 
 def check_channel_id(channels_list: list, path: str) -> list:
     """
-    Checks if there exists data for the provided channel ids in the 
+    Checks if there exists data for the provided channel ids in the
     directory (path arg), assuming the directory contains files of format
     <channel_id>.<ext>
     Args:
@@ -30,15 +40,21 @@ def check_channel_id(channels_list: list, path: str) -> list:
         if channel_id in channels_in_dir:
             to_remove.append(channel_id)
 
+    logger.info("Filtering {} out of {} provided channels".format(
+        len(to_remove), len(channels_list)
+    ))
+
     # remove the channel id from the list
     [channels_list.remove(channel_id) for channel_id in to_remove]
+
+    logger.info("The following channels remain: {}.".format(channels_list))
 
     return channels_list
 
 
-def get_response_item(resource_property: str, key: str, channel_id: str, path: str):
+def get_response_item(resource_property: str, key: str, channel_id: str, path: str, ext='.json'):
     """
-    Get the value for the key in the resource_property dict for the provided 
+    Get the value for the key in the resource_property dict for the provided
     channel_id and path.
     Args:
     - resource_property: a key in the response dict corresponding to the resource property ('part') to search
@@ -46,7 +62,6 @@ def get_response_item(resource_property: str, key: str, channel_id: str, path: s
     - channel_id: channel id
     - path: directory to search; must end with trailing /
     """
-    ext = '.json'
     with open(path+channel_id+ext) as response:
         data = json.load(response)
 
@@ -61,6 +76,8 @@ def page_through_response(service_instance, request, response) -> dict:
     Returns the full response dictionary.
     """
     output = response
+
+    counter = 0
     while response['items']:
 
         previous_request = request
@@ -70,17 +87,31 @@ def page_through_response(service_instance, request, response) -> dict:
                                              previous_response=previous_response)
         try:
             response = request.execute()
+            counter += 1
+            logger.info(
+                "This is paging request number {} for the resource {}.".format(
+                    counter, response["kind"]
+                )
+            )
         except AttributeError:
+            logger.exception(
+                "Paging request failed for request {}.".format(request)
+            )
             break
+
         # add the items from the response to output
         output['items'].extend(response['items'])
+        logger.info(
+            "{} values have been added to the reponse object's 'items' key."
+            .format(len(response['items']))
+        )
 
     return output
 
 
-def get_channel_details(service, channel_ids: str, part='snippet,statistics,brandingSettings', results=50):
+def get_channel_details(service, channels: list, part='snippet,statistics,brandingSettings', results=50):
     """
-    Makes use of the channel resource list method. Gets channel data for 
+    Makes use of the channel resource list method. Gets channel data for
     resource properties defined in the part argument and writes the repsonse
     to JSON files in data/channels
 
@@ -91,12 +122,11 @@ def get_channel_details(service, channel_ids: str, part='snippet,statistics,bran
     - results: Max results returned in the reponse
     """
     channel_detail = service.channels()
-    # split string into list of channel ids
-    channels_list = channel_ids.split(',')
+
     channels_path = 'data/channels/'
 
     # get list of channels for which there is no data in the channels_path dir
-    channels_list = check_channel_id(channels_list, channels_path)
+    channels_list = check_channel_id(channels, channels_path)
 
     if channels_list:
         # take list of filtered channel ids -> string of comma-separated ids
@@ -105,18 +135,31 @@ def get_channel_details(service, channel_ids: str, part='snippet,statistics,bran
         request = channel_detail.list(
             part=part, id=channel_ids, maxResults=results
         )
-        response = request.execute()
-        response_items = response['items']
-        # want to write a folder with the channel id to channels_path
-        # that holds .json files of the response for each channel id
-        for channel in response_items:  # channel is a dict of channel data
-            with open(channels_path+'{}.json'.format(channel['id']), 'w+') as channel_data:
-                response_obj = json.dumps(channel)
-                channel_data.write(response_obj)
+        try:
+            response = request.execute()
+            logger.info(
+                "Successfully made a request to the channels resource with channel ids {}.". format(
+                    channel_ids
+                )
+            )
+            response_items = response['items']
+            # want to write a folder with the channel id to channels_path
+            # that holds .json files of the response for each channel id
+            for channel in response_items:  # channel is a dict of channel data
+                with open(channels_path+'{}.json'.format(channel['id']), 'w+') as channel_data:
+                    response_obj = json.dumps(channel)
+                    channel_data.write(response_obj)
+                    logger.info(
+                        "Wrote channel data for channel id {}.".format(
+                            channel['id']
+                        )
+                    )
+        except Exception:
+            logger.exception(
+                "The request to the channels resource failed."
+            )
 
 
-# TODO: - implement some sort of logging of the response
-#       - add exception handling
 def get_channel_videos(service, channel_id: str, part='snippet', type='video', results=50):
     """
     Get video data associated with a channel id and write the response to a JSON
@@ -130,6 +173,9 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
 
     final_out = {}
     if channel:
+        logger.info(
+            "Retrieving video data for channel id {}.".format(channel_id)
+        )
         # how many videos the channel has
         video_ct = get_response_item(
             'statistics', 'videoCount', channel_id, channels_path
@@ -154,10 +200,18 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
                                          publishedBefore=end,
                                          maxResults=results
                                          )
-                response = request.execute()
+
+                try:
+                    response = request.execute()
+                except Exception:
+                    logger.exception(
+                        "The request to the search resource failed."
+                    )
 
                 # full response output for the year
-                data_out = page_through_response(yt_search, request, response)
+                data_out = page_through_response(
+                    yt_search, request, response
+                )
 
                 # build on the items list in the final_out dict to form the complete response
                 if final_out:
@@ -165,13 +219,17 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
                 else:
                     final_out = data_out
         else:
-            # TODO: refactor
             request = yt_search.list(part=part,
                                      channelId=channel_id,
                                      type=type,
                                      maxResults=results
                                      )
-            response = request.execute()
+            try:
+                response = request.execute()
+            except Exception:
+                logger.exception(
+                    "The request to the search resource failed."
+                )
 
             # full response output for the year
             data_out = page_through_response(yt_search, request, response)
@@ -187,15 +245,15 @@ def check_video_id():
     pass
 
 
-def get_video_details(service, part='snippet,contentDetails,statistics,topicDetails', results=50):
-    """
-    Loop through files in data/videos/unit_channel to get the videoId inside of each objects 
-    in the items list. Use this id to request data from the videos resource to get statistics 
-    on each video.
-    """
-    video_detail = service.videos()
-    video_ids = check_video_id()  # str of comma-sep video ids
-    video_detail.list(part=part, id=video_ids, maxResults=results)
+# def get_video_details(service, part='snippet,contentDetails,statistics,topicDetails', results=50):
+#     """
+#     Loop through files in data/videos/unit_channel to get the videoId inside of each objects
+#     in the items list. Use this id to request data from the videos resource to get statistics
+#     on each video.
+#     """
+#     video_detail = service.videos()
+#     video_ids = check_video_id()  # str of comma-sep video ids
+#     video_detail.list(part=part, id=video_ids, maxResults=results)
 
 
 def main():
@@ -216,10 +274,11 @@ def main():
     # store channel ids in a list
     channels = [row[0] for row in rows]
 
-    channels_str = ",".join(channels)
-    get_channel_details(service, channels_str)
+    # channels_str=",".join(channels)  # store in comma-separated string
+    get_channel_details(service, channels)
 
     for channel in channels:
+        print(channels)
         get_channel_videos(service, channel)
 
 
