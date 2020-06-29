@@ -5,7 +5,7 @@ from csv import reader
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from googleapiclient.discovery import build
-from data_processing.detect_face import detect_face
+from data_processing.detect_face import detect_face_v2
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -17,39 +17,41 @@ file_handler.setFormatter(formatter)
 logger.addHandler(file_handler)
 
 
-def check_channel_id(channels_list: list, path: str) -> list:
+def filter_channel_or_video(ids: list, path: str) -> list:
     """
-    Checks if there exists data for the provided channel ids in the
+    Checks if there exists data for the provided channel or video ids in the
     directory (path arg), assuming the directory contains files of format
-    <channel_id>.<ext>
+    <id>.<ext>
     Args:
-    - channel_ids: a list of channel ids
+    - ids: a list of channel or video ids
     - path: path to the directory to check
 
-    Returns a filtered list of channel_ids that were not found in the directory.
+    Returns a filtered list of ids that were not found in the directory.
     """
-    channels_in_dir = os.listdir(path)
+    all_files = os.listdir(path)
     # remove the file extension for the files in the dir
-    channels_in_dir = [
-        os.path.splitext(channel)[0] for channel in channels_in_dir
+    all_files = [
+        os.path.splitext(file_id)[0] for file_id in all_files
     ]
 
+    # create a copy of the list to avoid mutating the original
+    filtered = ids.copy()
     to_remove = []
-    # do a lookup of the channel id in the directory to see if a file already exists
-    for channel_id in channels_list:
-        if channel_id in channels_in_dir:
-            to_remove.append(channel_id)
+    # do a lookup of the id in the directory to see if a file already exists
+    for file_id in filtered:
+        if file_id in all_files:
+            to_remove.append(file_id)
 
-    logger.info("Filtering {} out of {} provided channels".format(
-        len(to_remove), len(channels_list)
+    logger.info("Filtering {} out of {} provided ids".format(
+        len(to_remove), len(filtered)
     ))
 
-    # remove the channel id from the list
-    [channels_list.remove(channel_id) for channel_id in to_remove]
+    # remove the id from the list
+    [filtered.remove(id) for id in to_remove]
 
-    logger.info("The following channels remain: {}.".format(channels_list))
+    logger.info("The following ids remain: {}.".format(filtered))
 
-    return channels_list
+    return filtered
 
 
 def get_response_item(resource_property: str, key: str, channel_id: str, path: str, ext='.json'):
@@ -78,7 +80,7 @@ def page_through_response(service_instance, request, response) -> dict:
     output = response
 
     counter = 0
-    while response['items']:
+    while response['items'] and len(response['items']) >= 50:
 
         previous_request = request
         previous_response = response
@@ -126,7 +128,7 @@ def get_channel_details(service, channels: list, part='snippet,statistics,brandi
     channels_path = 'data/channels/'
 
     # get list of channels for which there is no data in the channels_path dir
-    channels_list = check_channel_id(channels, channels_path)
+    channels_list = filter_channel_or_video(channels, channels_path)
 
     if channels_list:
         # take list of filtered channel ids -> string of comma-separated ids
@@ -167,9 +169,9 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
     """
     yt_search = service.search()
 
-    videos_path = 'data/videos/data/unit_channel/'
+    channel_videos_path = 'data/videos/data/unit_channel/'
     channels_path = 'data/channels/'
-    channel = check_channel_id([channel_id], videos_path)
+    channel = filter_channel_or_video([channel_id], channel_videos_path)
 
     final_out = {}
     if channel:
@@ -187,11 +189,22 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
         year_pub = datetime.strptime(year_pub, "%Y-%m-%dT%H:%M:%S%z").year
 
         if int(video_ct) > 500:
+            logger.info(
+                "The channel with id {} has >500 ({}) videos. Entering request loop.".format(
+                    channel_id, video_ct
+                )
+            )
             for year in range(year_pub, datetime.today().year+1):
                 start = datetime(year, 1, 1)
                 end = start + relativedelta(years=1)
                 # prepare dates in a format the YT API is happy with
                 start, end = [date.isoformat('T')+'Z' for date in [start, end]]
+
+                logger.info(
+                    "Requesting from the search resource with publishedAfter={} and publishedBefore={}.".format(
+                        start, end
+                    )
+                )
 
                 request = yt_search.list(part=part,
                                          channelId=channel_id,
@@ -219,6 +232,11 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
                 else:
                     final_out = data_out
         else:
+            logger.info(
+                "The channel with id {} has <=500 ({}) videos. Sending request to the search resource.".format(
+                    channel_id, video_ct
+                )
+            )
             request = yt_search.list(part=part,
                                      channelId=channel_id,
                                      type=type,
@@ -236,24 +254,68 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
 
             final_out = data_out
 
-        with open(videos_path+'{}.json'.format(channel_id), 'w+') as video_data:
+        with open(channel_videos_path+'{}.json'.format(channel_id), 'w+') as video_data:
             response_obj = json.dumps(final_out)
             video_data.write(response_obj)
 
 
-def check_video_id():
-    pass
+def get_video_details(service, part='snippet,contentDetails,statistics,topicDetails', results=50):
+    """
+    Loop through files in data/videos/unit_channel to get the videoId inside of each objects
+    in the items list. Use this id to request data from the videos resource to get statistics
+    on each video.
+    """
+    channel_videos_path = 'data/videos/data/unit_channel/'
+    videos_path = 'data/videos/data/unit_video/'
 
+    video_ids = []
+    # parse through json files to get all video ids
+    with os.scandir(channel_videos_path) as channel_vids:
+        for channel in channel_vids:
+            with open(channel, 'r') as videos:
+                response = json.load(videos)
+                for item in response['items']:
+                    video_ids.append(item['id']['videoId'])
 
-# def get_video_details(service, part='snippet,contentDetails,statistics,topicDetails', results=50):
-#     """
-#     Loop through files in data/videos/unit_channel to get the videoId inside of each objects
-#     in the items list. Use this id to request data from the videos resource to get statistics
-#     on each video.
-#     """
-#     video_detail = service.videos()
-#     video_ids = check_video_id()  # str of comma-sep video ids
-#     video_detail.list(part=part, id=video_ids, maxResults=results)
+    # filter out videos for which there is data in the folder already
+    videos = filter_channel_or_video(video_ids, videos_path)
+
+    video_detail = service.videos()
+    # TODO: Implement this as a function and use it for get_channel_details as well.
+    #       The way it's written now would break with >50 channels.
+    for i in range(0, len(videos), results):
+        sub_list = videos[i:i+results]
+        videos = ",".join(sub_list)
+        request = video_detail.list(part=part, id=videos, maxResults=results)
+        try:
+            response = request.execute()
+            for item in response['items']:
+                # determine if the thumbnail has a person in it
+                try:
+                    has_face = detect_face_v2(
+                        item['snippet']['thumbnails']['standard']['url']
+                    )
+                except KeyError:
+                    has_face = detect_face_v2(
+                        item['snippet']['thumbnails']['default']['url']
+                    )
+                # add has_face and the confidence as keys to the response dict
+                item['has_face'] = has_face[0]
+                item['detection_confidence'] = None
+                if item['has_face']:
+                    item['detection_confidence'] = has_face[1][0]['confidence']
+
+                # write the response for the video to a file
+                with open(videos_path+'{}.json'.format(item['id']), 'w+') as video_data:
+                    response_obj = json.dumps(item)
+                    video_data.write(response_obj)
+                    logger.info(
+                        "Wrote video data for video id {}.".format(
+                            item['id']
+                        )
+                    )
+        except Exception:
+            logger.exception("The request to the video resource failed.")
 
 
 def main():
@@ -271,15 +333,19 @@ def main():
         csv_reader = reader(f)
         next(csv_reader)  # skip header
         rows = list(csv_reader)
+
     # store channel ids in a list
     channels = [row[0] for row in rows]
 
-    # channels_str=",".join(channels)  # store in comma-separated string
+    # write channel detail info
     get_channel_details(service, channels)
 
     for channel in channels:
-        print(channels)
+        # write channel video data
         get_channel_videos(service, channel)
+
+    # finally, write video details
+    get_video_details(service)
 
 
 if __name__ == "__main__":
