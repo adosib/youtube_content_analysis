@@ -12,6 +12,12 @@ like clustering video titles, classification techniques to determine whether or 
 ## Running the code
 The first step in getting this code to run is to register an API key with Google's YouTube Data API. Details on how to do this are provided in my [blog post](#), but the 
 API is very accessible and the [official documentation](https://developers.google.com/youtube/v3/getting-started) provides plenty of details.
+After that, in the terminal, run
+```bash
+$ pip install -r requirements.txt --no-dependencies
+
+```
+The no-dependencies flag is important and ensures that you don't install 2 versions of openCV.
 
 ### Notes (mostly for myself)
 - Whether or not a person's face is in the video thumbnail cannot be taken at face value; that is to say, a successful YouTube content creator in this space may include 
