@@ -8,12 +8,12 @@ CLASSIFIER = cv2.CascadeClassifier(cv2.data.haarcascades +
                                    "haarcascade_frontalface_default.xml")
 
 
-def get_image(img_path):
+def get_image(img_url_path):
     """
     Fetches an image from a URL and returns the image represented as a numpy ndarray
     """
     # retrieve the image from the img_path url
-    r = requests.get(img_path)
+    r = requests.get(img_url_path)
 
     # save the image to a temp file
     jpg = tempfile.NamedTemporaryFile(mode="wb")
@@ -27,12 +27,12 @@ def get_image(img_path):
     return img
 
 
-def detect_face_v1(img_path, classifier=CLASSIFIER) -> tuple:
+def detect_face_v1(img_url_path, classifier=CLASSIFIER) -> tuple:
     """
     Detects whether or not a face is present in an image using Haar cascades.
     Returns a tuple with the bool and the output of the detectMultiScale method.
     """
-    img = get_image(img_path)
+    img = get_image(img_url_path)
 
     img_gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)  # grayscale img
 
@@ -49,20 +49,22 @@ def detect_face_v1(img_path, classifier=CLASSIFIER) -> tuple:
         return (False,)
 
 
-def detect_face_v2(img_path) -> tuple:
+def detect_face_v2(img_url_path) -> tuple:
     """
     Detects whether or not a face is present in an image using a (pretrained) CNN.
     Returns a tuple with the bool and the output of the detect_faces method.
     """
-    img = get_image(img_path)
+    img = get_image(img_url_path)
+    try:
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        detector = MTCNN()
+        face = detector.detect_faces(img)
 
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    detector = MTCNN()
-    face = detector.detect_faces(img)
-
-    if face:
-        return (True, face)
-    return (False,)
+        if face:
+            return (True, face)
+        return (False,)
+    except cv2.error:
+        return (False,)
 
 
 if __name__ == "__main__":
@@ -72,7 +74,7 @@ if __name__ == "__main__":
         description='Detects if a face is present in an image'
     )
     parser.add_argument(
-        '-img', '--image_path', required=True, type=str, help='path to an image'
+        '-img', '--image_path', required=True, type=str, help='URL path to an image'
     )
     parser.add_argument(
         '-v', '--algo_version', default=2, type=int, help='select a version of the face detection algo (1 or 2)'
