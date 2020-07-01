@@ -5,6 +5,7 @@ from csv import reader
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 from data_processing.detect_face import detect_face_v2
 
 logger = logging.getLogger(__name__)
@@ -48,8 +49,6 @@ def filter_channel_or_video(ids: list, path: str) -> list:
 
     # remove the id from the list
     [filtered.remove(id) for id in to_remove]
-
-    logger.info("The following ids remain: {}.".format(filtered))
 
     return filtered
 
@@ -216,7 +215,7 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
 
                 try:
                     response = request.execute()
-                except Exception:
+                except HttpError:
                     logger.exception(
                         "The request to the search resource failed."
                     )
@@ -244,7 +243,7 @@ def get_channel_videos(service, channel_id: str, part='snippet', type='video', r
                                      )
             try:
                 response = request.execute()
-            except Exception:
+            except HttpError:
                 logger.exception(
                     "The request to the search resource failed."
                 )
@@ -285,20 +284,29 @@ def get_video_details(service, part='snippet,contentDetails,statistics,topicDeta
     #       The way it's written now would break with >50 channels.
     for i in range(0, len(videos), results):
         sub_list = videos[i:i+results]
-        videos = ",".join(sub_list)
-        request = video_detail.list(part=part, id=videos, maxResults=results)
+        videos_str = ",".join(sub_list)
+        request = video_detail.list(
+            part=part, id=videos_str, maxResults=results
+        )
         try:
             response = request.execute()
             for item in response['items']:
+                logger.info(
+                    "Attempting to write data for video id {}".format(
+                        item['id']
+                    )
+                )
                 # determine if the thumbnail has a person in it
                 try:
-                    has_face = detect_face_v2(
-                        item['snippet']['thumbnails']['standard']['url']
-                    )
+                    img = item['snippet']['thumbnails']['standard']['url']
                 except KeyError:
-                    has_face = detect_face_v2(
-                        item['snippet']['thumbnails']['default']['url']
+                    img = item['snippet']['thumbnails']['high']['url']
+                    logger.exception(
+                        'No standard img url for video id {}'.format(
+                            item['id']
+                        )
                     )
+                has_face = detect_face_v2(img)
                 # add has_face and the confidence as keys to the response dict
                 item['has_face'] = has_face[0]
                 item['detection_confidence'] = None
@@ -314,8 +322,21 @@ def get_video_details(service, part='snippet,contentDetails,statistics,topicDeta
                             item['id']
                         )
                     )
-        except Exception:
-            logger.exception("The request to the video resource failed.")
+        except HttpError as e:
+            logger.exception(
+                "The request to the video resource failed. Error {}".format(
+                    e.resp
+                )
+            )
+            if e.resp.status == 403:
+                break
+            else:
+                logger.exception(
+                    "Failed to get video resource data for videos ids {}".format(
+                        videos
+                    )
+                )
+                continue
 
 
 def main():
